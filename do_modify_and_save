@@ -1,0 +1,77 @@
+  METHOD do_modify_and_save.
+*Tabela Interna
+    DATA:lt_mod           TYPE /bobf/t_frw_modification,
+         lt_chaged_fields TYPE /bobf/t_frw_name,
+         lt_return_tab    TYPE bapiret2_tab.
+
+*Variáveis
+    DATA:lv_rejected      TYPE boole_d.
+
+*Constantes:
+    CONSTANTS:cc_ana(13) TYPE c VALUE 'ANALYTICRELEV'.
+
+*Objetos Referência.
+    DATA: lr_s_itemch TYPE REF TO /scmtms/s_tcc_trchrg_element_k,
+          lo_change   TYPE REF TO /bobf/if_tra_change,
+          lo_message  TYPE REF TO /bobf/if_frw_message.
+
+*Objetos
+    DATA(io_svc_mngr) = /bobf/cl_tra_serv_mgr_factory=>get_service_manager( /scmtms/if_tor_c=>sc_bo_key ).
+    DATA(io_bo_conf) = /bobf/cl_frw_factory=>get_configuration( /scmtms/if_tor_c=>sc_bo_key ).
+    DATA(io_txn_mngr) = /bobf/cl_tra_trans_mgr_factory=>get_transaction_manager( ).
+
+*Início
+
+    APPEND cc_ana TO lt_chaged_fields.
+*    APPEND cc_toll_vol TO lt_chaged_fields.
+    LOOP AT lt_cha_item INTO DATA(ls_cha_item).
+      CREATE DATA lr_s_itemch.
+      lr_s_itemch->*  = ls_cha_item.
+      APPEND INITIAL LINE TO lt_mod ASSIGNING FIELD-SYMBOL(<ls_mod>).
+      <ls_mod>-node        = lv_content_node_key.
+      <ls_mod>-source_node = lv_change_node_key.
+      <ls_mod>-association = lv_content_assoc_key.
+
+      <ls_mod>-key         = ls_cha_item-key.
+      <ls_mod>-change_mode = /bobf/if_frw_c=>sc_modify_update.
+      <ls_mod>-root_key    = lt_key[ 1 ]-key.
+      <ls_mod>-data        = lr_s_itemch.
+      <ls_mod>-changed_fields = lt_chaged_fields.
+      CLEAR lr_s_itemch.
+    ENDLOOP.
+
+    CALL METHOD io_svc_mngr->modify
+      EXPORTING
+        it_modification = lt_mod
+      IMPORTING
+        eo_change       = lo_change
+        eo_message      = lo_message.
+
+    CALL METHOD io_txn_mngr->save
+      IMPORTING
+        eo_message  = lo_message
+        ev_rejected = lv_rejected.
+
+    IF lv_rejected IS NOT INITIAL.
+
+      /scmtms/cl_common_helper=>msg_convert_bopf_2_bapiret2(
+                 EXPORTING
+                   io_message  = lo_message
+                 CHANGING
+                   ct_bapiret2 = lt_return_tab ).
+
+      IF line_exists( lt_return_tab[ 1 ] ).
+        READ TABLE lt_return_tab INTO DATA(ls_return) WITH KEY  type = /bobf/if_frw_c=>sc_change_failed_only.
+        IF sy-subrc = 0.
+          e_message = ls_return-message.
+          e_tipo    = /bobf/if_frw_c=>sc_change_failed_only.
+        ENDIF.
+      ENDIF.
+    ELSE.
+      DATA(lv_io) = |{ i_of ALPHA = OUT }|.
+      CONDENSE lv_io.
+      e_message = |{ lv_io } { TEXT-001 }|.
+      e_tipo    = /bobf/if_frw_c=>sc_change_succ_only.
+    ENDIF.
+
+  ENDMETHOD.
