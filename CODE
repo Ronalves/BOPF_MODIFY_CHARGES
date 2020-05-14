@@ -1,0 +1,155 @@
+  METHOD inputa_estatistico.
+*Tabela Interna
+    DATA: lt_key                 TYPE /bobf/t_frw_key,
+          lt_torid               TYPE /scmtms/t_tor_id,
+          lt_link                TYPE /bobf/t_frw_key_link,
+          lt_key_transp          TYPE /bobf/t_frw_key,
+          lt_cont_chargeitem_key TYPE /bobf/t_frw_key,
+          lt_cha_item            TYPE /scmtms/t_tcc_trchrg_element_k,
+          it_link                TYPE /bobf/t_frw_key_link.
+
+*Variáveis
+    DATA:lv_chargeitem_key    TYPE /bobf/conf_key,
+         lv_change_node_key   TYPE /bobf/conf_key,
+         lv_content_node_key  TYPE /bobf/conf_key,
+         lv_content_assoc_key TYPE /bobf/conf_key,
+         lv_save              TYPE abap_bool,
+         lv_message           TYPE string,
+         lv_tipo              TYPE msgtyp.
+
+*Objetos.
+    DATA(lo_ro) = NEW /scmtms/cl_tor_helper_root( ).
+    DATA(lo_tormgr) = /bobf/cl_tra_serv_mgr_factory=>get_service_manager( /scmtms/if_tor_c=>sc_bo_key ).
+
+*Constantes:
+    CONSTANTS:cc_toll_ida(8)  TYPE c VALUE 'TOLL_IDA',
+              cc_toll_vol(10) TYPE c VALUE 'TOLL_VOLTA',
+              cc_ida(3)       TYPE c VALUE 'Ida',
+              cc_volta(5)     TYPE c VALUE 'Volta'.
+
+*Início
+*-----------------------------------------------------------------
+    APPEND i_of TO lt_torid.
+*-----------------------------------------------------------------
+    lo_ro->get_key_from_torid(
+    EXPORTING
+      it_torid    = lt_torid
+      IMPORTING
+        et_torkey = lt_key
+      ).
+*-----------------------------------------------------------------
+    IF lt_key[] IS NOT INITIAL.
+
+      lo_tormgr->retrieve_by_association(
+        EXPORTING
+          iv_node_key    = /scmtms/if_tor_c=>sc_node-root
+          it_key         = lt_key
+          iv_association = /scmtms/if_tor_c=>sc_association-root-transportcharges
+        IMPORTING
+          et_key_link    = lt_link
+          et_target_key  = lt_key_transp ).
+
+      IF lt_key_transp[] IS NOT INITIAL.
+*****2) Busca chave do campo TRANSPORTCHARGES
+        CLEAR: lv_chargeitem_key.
+        /scmtms/cl_common_helper=>get_do_keys_4_rba(
+          EXPORTING
+            iv_host_bo_key      = /scmtms/if_tor_c=>sc_bo_key
+            iv_host_do_node_key = /scmtms/if_tor_c=>sc_node-transportcharges
+            iv_do_assoc_key     = /scmtms/if_tcc_trnsp_chrg_c=>sc_association-root-chargeitem
+          IMPORTING "DO Runtime Model Association Key
+            ev_assoc_key        = lv_chargeitem_key ).
+
+***** 3) Busca chave do conteúdo do campo CHARGEITEM
+        CLEAR lt_cont_chargeitem_key.
+        lo_tormgr->retrieve_by_association(
+          EXPORTING
+            iv_node_key    = /scmtms/if_tor_c=>sc_node-transportcharges
+            it_key         = lt_key_transp
+            iv_association = lv_chargeitem_key
+          IMPORTING
+            et_key_link    = it_link
+            et_target_key  = lt_cont_chargeitem_key ).
+
+****** 4) Busca Chave do nó CHARGEITEM
+        CLEAR: lv_change_node_key.
+        /scmtms/cl_common_helper=>get_do_keys_4_rba(
+          EXPORTING
+            iv_host_bo_key      = /scmtms/if_tor_c=>sc_bo_key
+            iv_host_do_node_key = /scmtms/if_tor_c=>sc_node-transportcharges
+            iv_do_node_key      = /scmtms/if_tcc_trnsp_chrg_c=>sc_node-chargeitem
+          IMPORTING "DO Runtime Model Association Key
+            ev_node_key         = lv_change_node_key ).
+
+****** 5) Busca chave do nó do campo ITEMCHARGEELEMENT
+        CLEAR: lv_content_node_key,
+               lv_content_assoc_key.
+
+        /scmtms/cl_common_helper=>get_do_keys_4_rba(
+              EXPORTING
+                 iv_host_bo_key      = /scmtms/if_tor_c=>sc_bo_key
+                 iv_host_do_node_key = /scmtms/if_tor_c=>sc_node-transportcharges
+                 iv_do_node_key      = /scmtms/if_tcc_trnsp_chrg_c=>sc_node-itemchargeelement
+                 iv_do_assoc_key     = /scmtms/if_tcc_trnsp_chrg_c=>sc_association-chargeitem-itemchargeelement
+              IMPORTING
+                 ev_node_key         = lv_content_node_key
+                 ev_assoc_key        = lv_content_assoc_key ).
+**** 6) Busca conteúdo do Campo ITEMCHARGEELEMENT
+        IF lv_change_node_key IS NOT INITIAL AND
+           lt_cont_chargeitem_key IS NOT INITIAL AND
+           lv_content_assoc_key IS NOT INITIAL.
+
+          CLEAR: lt_cha_item.
+
+          lo_tormgr->retrieve_by_association(
+           EXPORTING
+             iv_node_key    = lv_change_node_key
+             it_key         = lt_cont_chargeitem_key "DO runtime model association key
+             iv_association = lv_content_assoc_key
+             iv_fill_data   = abap_true
+           IMPORTING
+             et_data        = lt_cha_item ).
+
+          IF i_voytyp = cc_ida.
+            READ TABLE lt_cha_item ASSIGNING FIELD-SYMBOL(<fl_1>) WITH KEY tcet084 = cc_toll_ida.
+            IF sy-subrc = 0.
+              <fl_1>-analyticrelev = abap_true.
+              lv_save = abap_true.
+            ENDIF.
+          ENDIF.
+
+          UNASSIGN <fl_1>.
+          IF i_voytyp = cc_volta.
+            READ TABLE lt_cha_item ASSIGNING <fl_1> WITH KEY tcet084 = cc_toll_vol.
+            IF sy-subrc = 0.
+              <fl_1>-analyticrelev = abap_true.
+              lv_save = abap_true.
+            ENDIF.
+          ENDIF.
+
+          IF lv_save IS NOT INITIAL.
+            do_modify_and_save(
+              EXPORTING
+                lt_cha_item          = lt_cha_item
+                lv_change_node_key   = lv_change_node_key
+                lv_content_assoc_key = lv_content_assoc_key
+                lv_content_node_key  = lv_content_node_key
+                lt_key               = lt_key
+                i_of                 = i_of
+              IMPORTING
+                e_message            = lv_message
+                e_tipo               = lv_tipo
+            ).
+            IF with_message IS NOT INITIAL.
+              IF lv_tipo = /bobf/if_frw_c=>sc_change_failed_only.
+                MESSAGE e000(yotm_pedagio) WITH lv_message.
+              ELSEIF lv_tipo = /bobf/if_frw_c=>sc_change_succ_only.
+                MESSAGE s000(yotm_pedagio) WITH lv_message.
+              ENDIF.
+            ENDIF.
+          ENDIF.
+        ENDIF.
+      ENDIF.
+    ENDIF.
+
+  ENDMETHOD.
